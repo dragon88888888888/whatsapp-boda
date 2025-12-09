@@ -1,30 +1,33 @@
 {
   "type": "module",
-  "name": "whatsapp-agent",
-  "version": "1.0.0",
-  "description": "Agente inteligente de WhatsApp con RAG usando LangChain, Pinecone y Google Gemini",
+  "name": "whatsapp-wedding-bot",
+  "version": "2.0.0",
+  "description": "Bot de WhatsApp para asistente de itinerario de boda usando RAG con LangChain, Supabase y OpenAI",
   "main": "chatwhats.js",
   "private": true,
   "scripts": {
     "start": "node chatwhats.js",
+    "dev": "nodemon chatwhats.js",
     "index": "node document-index.js",
-    "dev": "nodemon chatwhats.js"
+    "upload-pdfs": "node pdf-storage.js",
+    "chat": "node rag-chat.js"
   },
   "dependencies": {
-    "@langchain/community": "^0.3.42",
-    "@langchain/core": "^0.2.27",
-    "@langchain/google-genai": "^0.0.26",
-    "@langchain/langgraph": "^0.0.34",
-    "@langchain/pinecone": "^0.0.9",
-    "@pinecone-database/pinecone": "^3.0.1",
-    "cheerio": "^1.0.0",
-    "dotenv": "^16.5.0",
-    "express": "^5.1.0",
-    "langchain": "^0.2.16",
-    "node-fetch": "^3.3.2",
-    "pdf-parse": "^1.1.1",
-    "uuid": "^11.1.0",
-    "zod": "^3.23.8"
+    "@langchain/community": "latest",
+    "@langchain/core": "latest",
+    "@langchain/langgraph": "latest",
+    "@langchain/mcp-adapters": "^1.0.3",
+    "@langchain/openai": "latest",
+    "@langchain/textsplitters": "latest",
+    "@supabase/supabase-js": "latest",
+    "dotenv": "latest",
+    "express": "latest",
+    "langchain": "latest",
+    "node-fetch": "latest",
+    "openai": "latest",
+    "pdf-parse": "^1",
+    "uuid": "latest",
+    "zod": "latest"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

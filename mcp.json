@@ -1,14 +1,7 @@
 {
   "mcpServers": {
-    "context7": {
-      "type": "http",
-      "url": "https://mcp.context7.com/mcp",
-      "headers": {
-        "CONTEXT7_API_KEY": "ctx7sk-005c9525-0955-4dbb-b758-36745814afe3"
-      }
-    },
     "supabase": {
-      "type": "http",
+      "transport": "streamable_http",
       "url": "https://mcp.supabase.com/mcp?project_ref=eexonhqejvuggdsxthua",
       "headers": {
         "Authorization": "Bearer sbp_ab16e99a2e2dbe18dfbb143f2ab8df4e746f24f4"

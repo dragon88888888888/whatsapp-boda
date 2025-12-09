@@ -3,201 +3,337 @@ if (!globalThis.fetch) {
     globalThis.fetch = fetch;
 }
 
-import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
-import { TaskType } from "@google/generative-ai";
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
-import { PineconeStore } from "@langchain/pinecone";
-import { Pinecone } from "@pinecone-database/pinecone";
-import { ChatPromptTemplate } from "@langchain/core/prompts";
-import { StringOutputParser } from "@langchain/core/output_parsers";
-import { HumanMessage } from "@langchain/core/messages";
-import { StateGraph } from "@langchain/langgraph";
-import { MemorySaver, Annotation } from "@langchain/langgraph";
-import { createStuffDocumentsChain } from "langchain/chains/combine_documents";
+import { OpenAIEmbeddings, ChatOpenAI } from "@langchain/openai";
+import { createClient } from "@supabase/supabase-js";
+import { SupabaseVectorStore } from "@langchain/community/vectorstores/supabase";
+import { MultiServerMCPClient } from "@langchain/mcp-adapters";
+import { createAgent, tool } from "langchain";
+import { z } from "zod";
 import readline from 'readline';
 import { v4 as uuidv4 } from 'uuid';
 import dotenv from "dotenv";
+import { PDFStorage } from './pdf-storage.js';
+import fs from 'fs/promises';
+import path from 'path';
 
 dotenv.config();
 
-//Función para buscar videos en YouTube utilizando la API de YouTube Data v3
-async function youtubeSearch(query) {
-    const apiKey = process.env.YOUTUBE_API_KEY;
-    const channelId = process.env.YOUTUBE_CHANNEL_ID; 
-    if (!apiKey) {
-        throw new Error("Falta YOUTUBE_API_KEY en las variables de entorno");
-    }
-    if (!channelId) {
-        throw new Error("Falta YOUTUBE_CHANNEL_ID en las variables de entorno");
-    }
-    const maxResults = 3;
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&channelId=${process.env.YOUTUBE_CHANNEL_ID}&q=${encodeURIComponent(query)}&maxResults=${maxResults}&key=${apiKey}`;
-    const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`Error en la API de YouTube: ${response.statusText}`);
-    }
-    const data = await response.json();
-    if (data.items && data.items.length > 0) {
-        // Procesamos cada resultado y los unimos en un solo string, separados por saltos de línea
-        return data.items.map(item => {
-            const videoId = item.id.videoId;
-            const title = item.snippet.title;
-            return `https://www.youtube.com/watch?v=${videoId} (${title})`;
-        }).join("\n");
-    }
-    return "No se encontró video relacionado";
-
-}
-
-
 class AgenticRAGSystem {
     constructor() {
-        this.pinecone = new Pinecone();
-        this.pineconeIndex = this.pinecone.Index(process.env.PINECONE_INDEX);
-        this.embeddings = new GoogleGenerativeAIEmbeddings({
-            model: "text-embedding-004",
-            taskType: TaskType.RETRIEVAL_DOCUMENT,
+        this.supabase = createClient(
+            process.env.SUPABASE_URL,
+            process.env.SUPABASE_SERVICE_KEY
+        );
+
+        this.embeddings = new OpenAIEmbeddings({
+            modelName: "text-embedding-3-small",
+            openAIApiKey: process.env.OPENAI_API_KEY,
         });
-        this.model = new ChatGoogleGenerativeAI({
-            model: "gemini-2.0-flash-lite",
-            maxOutputTokens: 2048,
-            apiKey: process.env.GOOGLE_API_KEY,
+
+        this.pdfStorage = new PDFStorage();
+        this.sessionId = uuidv4();
+        this.conversationHistory = "";
+        this.downloadsDir = './downloads';
+        this.mcpClient = null;
+        this.agent = null;
+        this.model = new ChatOpenAI({
+            modelName: "gpt-4o-mini",
+            temperature: 0.7,
+            maxTokens: 2048,
+            openAIApiKey: process.env.OPENAI_API_KEY,
         });
-        this.sessionId = uuidv4(); // ID único por sesión
-        this.conversationHistory = ""; // Historial de la conversación
     }
 
     async initVectorStore() {
-        this.vectorStore = await PineconeStore.fromExistingIndex(this.embeddings, {
-            pineconeIndex: this.pineconeIndex,
-        });
+        this.vectorStore = await SupabaseVectorStore.fromExistingIndex(
+            this.embeddings,
+            {
+                client: this.supabase,
+                tableName: "documents",
+                queryName: "match_documents",
+            }
+        );
         return this.vectorStore;
     }
 
-    // Método para extraer palabras clave a partir de un texto usando el LLM
-    async extractKeywords(text) {
-        const promptText = `Resume la siguiente respuesta a solo dos palabras clave para buscar videos en YouTube. Solo proporciona las dos palabras clave separadas por comas.
+    async initMCPAgent() {
+        try {
+            // Crear tools personalizadas
+            const getCurrentDateTool = tool(
+                () => {
+                    const now = new Date();
+                    const dateOptions = {
+                        weekday: 'long',
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric',
+                        timeZone: 'Europe/Paris'
+                    };
+                    const timeOptions = {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        timeZone: 'Europe/Paris',
+                        timeZoneName: 'short'
+                    };
+                    const dateStr = now.toLocaleDateString('es-ES', dateOptions);
+                    const timeStr = now.toLocaleTimeString('es-ES', timeOptions);
+                    return `${dateStr}, ${timeStr}`;
+                },
+                {
+                    name: "obtener_fecha_actual",
+                    description: "Obtiene la fecha y hora actual en zona horaria de Europa Central (CET/CEST). Úsala cuando el usuario pregunte qué día es hoy, qué hora es, o necesites saber la fecha actual.",
+                    schema: z.object({})
+                }
+            );
 
-Respuesta: ${text}
+            const searchRAGTool = tool(
+                async ({ pregunta }) => {
+                    const retriever = this.vectorStore.asRetriever({ k: 5 });
+                    const docs = await retriever.invoke(pregunta);
+                    const context = docs.map(doc => doc.pageContent).join('\n\n');
 
-Palabras clave:`;
-        const result = await this.model.invoke(promptText);
-    
-        const keywords = (typeof result === 'string') ? result : result.content;
-        return keywords.trim();
+                    const prompt = `Basándote en el siguiente contexto del itinerario de viaje, responde la pregunta del usuario de manera concisa y útil.
+
+Contexto:
+${context}
+
+Pregunta: ${pregunta}
+
+Respuesta:`;
+
+                    const response = await this.model.invoke(prompt);
+                    return typeof response === 'string' ? response : response.content;
+                },
+                {
+                    name: "buscar_en_itinerario",
+                    description: "Busca información en el itinerario de viaje (vuelos, hoteles, tours, actividades, etc.). Usa esta herramienta cuando el usuario pregunte sobre su viaje, horarios, direcciones, reservas, o cualquier información del itinerario.",
+                    schema: z.object({
+                        pregunta: z.string().describe("La pregunta del usuario sobre el itinerario")
+                    })
+                }
+            );
+
+            const searchPDFTool = tool(
+                async ({ solicitud }) => {
+                    const result = await this.downloadRequestedPDF(solicitud);
+                    if (result.found) {
+                        const fileList = result.files.map(f => `- ${f.name} (${f.category})`).join('\n');
+                        return `Encontré los siguientes documentos:\n${fileList}\n\nLos documentos han sido descargados y están disponibles.`;
+                    } else {
+                        return result.message;
+                    }
+                },
+                {
+                    name: "buscar_y_descargar_documento",
+                    description: "Busca y descarga documentos PDF específicos (boletos, reservas, confirmaciones, etc.). Usa esta herramienta cuando el usuario solicite explícitamente un documento o PDF.",
+                    schema: z.object({
+                        solicitud: z.string().describe("Descripción del documento que el usuario está solicitando (ej: 'boletos museo vaticano', 'reserva hotel roma')")
+                    })
+                }
+            );
+
+            // Obtener tools del MCP de Supabase
+            let mcpTools = [];
+            try {
+                const mcpConfig = JSON.parse(await fs.readFile('mcp.json', 'utf-8'));
+                const supabaseConfig = mcpConfig.mcpServers.supabase;
+
+                if (supabaseConfig) {
+                    this.mcpClient = new MultiServerMCPClient({
+                        supabase: {
+                            transport: "http",
+                            url: supabaseConfig.url,
+                            headers: supabaseConfig.headers
+                        }
+                    });
+
+                    mcpTools = await this.mcpClient.getTools();
+                    console.log(`MCP Tools de Supabase: ${mcpTools.length} disponibles`);
+                }
+            } catch (mcpError) {
+                console.warn('No se pudieron cargar MCP tools:', mcpError.message);
+            }
+
+            // Combinar todas las tools
+            const allTools = [
+                getCurrentDateTool,
+                searchRAGTool,
+                searchPDFTool,
+                ...mcpTools
+            ];
+
+            console.log(`Total de tools: ${allTools.length} (${allTools.length - mcpTools.length} personalizadas + ${mcpTools.length} MCP)`);
+
+            // Crear el agente con todas las tools
+            this.agent = createAgent({
+                model: "gpt-4o-mini",
+                tools: allTools,
+            });
+
+            console.log('Agente unificado creado correctamente');
+        } catch (error) {
+            console.error('Error inicializando agente:', error);
+            throw error;
+        }
     }
 
-
-    // Nodo RAG que procesa la pregunta y actualiza el historial
-    async ragChainNode(question) {
-        const retriever = this.vectorStore.asRetriever({ k: 2000 });
-        const prompt = ChatPromptTemplate.fromMessages([
-            ["system", `Eres un filósofo que responde preguntas utilizando el contexto recuperado y el historial de conversación. responde en formato Markdown.
-Historial: {conversationHistory}
-Pregunta: {question}
-Contexto: {context}
-Respuesta:`],
-        ]);
-        const chain = await createStuffDocumentsChain({
-            llm: this.model,
-            prompt,
-            outputParser: new StringOutputParser(),
-        });
-        const retrievedDocs = await retriever.invoke(question);
-        const ragResponse = await chain.invoke({
-            question,
-            context: retrievedDocs,
-            conversationHistory: this.conversationHistory,
-        });
-        // Actualizamos el historial: concatenamos la pregunta y respuesta
-        this.conversationHistory += `Pregunta: ${question}\nRespuesta: ${ragResponse}\n`;
-        return ragResponse;
+    async saveConversationHistory(userId, message, role) {
+        try {
+            await this.supabase
+                .from('conversation_history')
+                .insert({
+                    user_id: userId,
+                    message: message,
+                    role: role
+                });
+        } catch (error) {
+            console.error("Error guardando historial:", error);
+        }
     }
 
-    // Nodo "agent": procesa la pregunta usando el RAG y retorna la respuesta
-    async agentNode(state) {
-        const lastMsg = state.messages[state.messages.length - 1];
-        const answer = await this.ragChainNode(lastMsg.content);
-        return { messages: [new HumanMessage(answer)] };
+    async getConversationHistory(userId, limit = 10) {
+        try {
+            const { data, error } = await this.supabase
+                .from('conversation_history')
+                .select('message, role, created_at')
+                .eq('user_id', userId)
+                .order('created_at', { ascending: false })
+                .limit(limit);
+
+            if (error) throw error;
+
+            return data.reverse().map(row =>
+                `${row.role === 'user' ? 'Usuario' : 'Asistente'}: ${row.message}`
+            ).join('\n');
+        } catch (error) {
+            console.error("Error recuperando historial:", error);
+            return "";
+        }
     }
 
-    // NUEVO nodo "youtube": utiliza la última respuesta del historial para buscar un video relacionado
-    async youtubeSearchNode(state) {
-        // Extraemos la última respuesta
-        const segments = this.conversationHistory.split('Respuesta:');
-        const lastAnswer = segments[segments.length - 1].trim();
-        // Usamos el LLM para extraer palabras clave que resuman el tema central
-        const keywords = await this.extractKeywords(lastAnswer);
-        console.log("Palabras clave extraídas:", keywords);
-        const videoResult = await youtubeSearch(keywords);
-        return { messages: [new HumanMessage(`Video relacionado: ${videoResult}`)] };
+    async downloadRequestedPDF(pdfRequest) {
+        try {
+            let pdfs = [];
+
+            if (this.agent) {
+                console.log('Usando agente MCP para buscar documentos...');
+                try {
+                    const searchPrompt = `Busca en la tabla pdf_files los documentos relacionados con: "${pdfRequest}".
+
+La tabla tiene las columnas: file_name, category, description.
+Usa SQL ILIKE para búsqueda flexible.
+Busca específicamente documentos que coincidan con las palabras clave importantes de la solicitud.
+Por ejemplo, si pide "boletos museo vaticano", busca documentos que contengan "vaticano" y "museo" en file_name o description, no solo todos los documentos con categoría "boleto".
+
+Devuelve el nombre del archivo (file_name), categoría y descripción de los documentos más relevantes.`;
+
+                    const agentResponse = await this.agent.invoke({
+                        messages: [{ role: "user", content: searchPrompt }],
+                    });
+
+                    console.log('Respuesta del agente MCP:', JSON.stringify(agentResponse, null, 2));
+
+                    const lastMessage = agentResponse.messages[agentResponse.messages.length - 1];
+                    const content = lastMessage.content;
+
+                    if (content && content.length > 0) {
+                        const fileNames = content.match(/[\w\s]+\.pdf/gi) || [];
+
+                        for (const fileName of fileNames) {
+                            const pdfInfo = await this.pdfStorage.getPDFWithURL(fileName.trim());
+                            if (pdfInfo) {
+                                pdfs.push(pdfInfo);
+                            }
+                        }
+                    }
+                } catch (mcpError) {
+                    console.warn('Error usando agente MCP:', mcpError.message);
+                    console.log('Fallback a búsqueda tradicional...');
+                }
+            }
+
+            if (pdfs.length === 0) {
+                console.log('Usando búsqueda tradicional...');
+                pdfs = await this.pdfStorage.searchPDFIntelligent(pdfRequest);
+            }
+
+            if (pdfs.length === 0) {
+                return {
+                    found: false,
+                    message: `No se encontró ningún documento relacionado con "${pdfRequest}"`
+                };
+            }
+
+            await fs.mkdir(this.downloadsDir, { recursive: true });
+
+            const downloadedFiles = [];
+            for (const pdf of pdfs) {
+                const buffer = await this.pdfStorage.downloadPDFBuffer(pdf.file_name);
+                const localPath = path.join(this.downloadsDir, pdf.file_name);
+                await fs.writeFile(localPath, buffer);
+
+                downloadedFiles.push({
+                    name: pdf.file_name,
+                    path: localPath,
+                    category: pdf.category,
+                    description: pdf.description,
+                    downloadUrl: pdf.downloadUrl
+                });
+            }
+
+            return {
+                found: true,
+                files: downloadedFiles,
+                message: `Se encontró(n) ${downloadedFiles.length} documento(s)`
+            };
+        } catch (error) {
+            console.error('Error descargando PDF:', error);
+            return {
+                found: false,
+                error: true,
+                message: `Error al buscar o descargar el documento: ${error.message}`
+            };
+        }
     }
 
-    // Creamos el grafo de agentes que incluye el nodo RAG y el nodo de búsqueda en YouTube
-    async createAgentGraph() {
-        const GraphState = Annotation.Root({
-            messages: Annotation({
-                reducer: (x, y) => x.concat(y),
-            }),
-        });
-
-        // Nodo que procesa la respuesta RAG
-        const agentNodeFunc = async (state) => {
-            const lastMsg = state.messages[state.messages.length - 1];
-            const answer = await this.ragChainNode(lastMsg.content);
-            return { messages: [new HumanMessage(answer)] };
-        };
-
-        // Nodo que usa la respuesta del RAG para buscar un video en YouTube, usando las palabras clave extraídas
-        const youtubeNodeFunc = async (state) => {
-            const segments = this.conversationHistory.split('Respuesta:');
-            const lastAnswer = segments[segments.length - 1].trim();
-            const keywords = await this.extractKeywords(lastAnswer);
-            //console.log("Palabras clave extraídas en nodo YouTube:", keywords);
-            const videoResult = await youtubeSearch(keywords);
-            return { messages: [new HumanMessage(`Videos recomendados: ${videoResult}`)] };
-        };
-
-        // Construimos el grafo:
-        // - Desde el inicio se llama al nodo "agent"
-        // - Luego, se hacen dos transiciones:
-        //   1. Desde "agent" directamente a "__end__" para guardar la respuesta del RAG.
-        //   2. Desde "agent" a "youtube" para obtener el enlace del video.
-        // - Ambos caminos terminan en "__end__".
-        const workflow = new StateGraph(GraphState)
-            .addNode("agent", agentNodeFunc)
-            .addNode("youtube", youtubeNodeFunc)
-            .addEdge("__start__", "agent")
-            .addEdge("agent", "__end__")      // Rama directa para la respuesta RAG
-            .addEdge("agent", "youtube")       // Rama para búsqueda en YouTube
-            .addEdge("youtube", "__end__");    // Rama final para YouTube
-
-        const checkpointer = new MemorySaver();
-        return workflow.compile();
-    }
-
-    async processQuery(question) {
+    async processQuery(question, userId = null) {
         try {
             const messageId = uuidv4();
             console.log("Procesando pregunta:", question);
-            const agentGraph = await this.createAgentGraph();
-            const graphState = await agentGraph.invoke({
-                messages: [new HumanMessage(question)],
-            }, {
-                configurable: {
-                    thread_id: this.sessionId,
-                    checkpoint_id: messageId,
-                },
+
+            if (!this.agent) {
+                throw new Error("El agente no ha sido inicializado. Llama a initMCPAgent() primero.");
+            }
+
+            // Usar el agente unificado para responder
+            const response = await this.agent.invoke({
+                messages: [{ role: "user", content: question }],
             });
-            // Tomamos los dos últimos mensajes, suponiendo:
-            // - Penúltimo: respuesta del RAG
-            // - Último: resultado de la búsqueda en YouTube
-            const lastTwo = graphState.messages.slice(-2);
-            const combined = lastTwo.map(msg => msg.content).join("\n\n");
+
+            // Extraer la respuesta final
+            const lastMessage = response.messages[response.messages.length - 1];
+            const answer = typeof lastMessage.content === 'string'
+                ? lastMessage.content
+                : JSON.stringify(lastMessage.content);
+
+            // Guardar en historial si hay userId
+            if (userId) {
+                await this.saveConversationHistory(userId, question, 'user');
+                await this.saveConversationHistory(userId, answer, 'assistant');
+            }
+
+            // Actualizar historial en memoria
+            this.conversationHistory += `Usuario: ${question}\nAsistente: ${answer}\n`;
+
+            // Verificar si se descargaron PDFs (revisando el contenido de la respuesta)
+            const pdfMentioned = answer.toLowerCase().includes('documento') ||
+                                answer.toLowerCase().includes('descargado');
+
             return {
                 messageId,
                 sessionId: this.sessionId,
-                answer: combined,
+                answer,
+                pdfResult: pdfMentioned ? { found: true, message: "Documentos procesados" } : null,
             };
         } catch (error) {
             console.error("Error procesando la consulta:", error);
@@ -206,7 +342,6 @@ Respuesta:`],
     }
 }
 
-// Interfaz de consola
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -215,9 +350,13 @@ const rl = readline.createInterface({
 async function startChat() {
     try {
         console.log("Iniciando sistema de chat...");
+        console.log("1. Creando AgenticRAGSystem...");
         const agenticRAG = new AgenticRAGSystem();
+        console.log("2. Inicializando vector store...");
         await agenticRAG.initVectorStore();
-        console.log(`Sistema listo! [Session ID: ${agenticRAG.sessionId}]`);
+        console.log("3. Inicializando MCP agent...");
+        await agenticRAG.initMCPAgent();
+        console.log(`4. Sistema listo! [Session ID: ${agenticRAG.sessionId}]`);
         console.log("Escribe tu pregunta o 'salir' para terminar\n");
 
         const askQuestion = () => {
@@ -229,7 +368,25 @@ async function startChat() {
                 try {
                     const response = await agenticRAG.processQuery(question);
                     console.log('\nRespuesta:', response.answer);
-                    console.log(`Message ID: ${response.messageId}`);
+
+                    if (response.pdfResult) {
+                        console.log('\n--- DOCUMENTOS ---');
+                        if (response.pdfResult.found) {
+                            console.log(response.pdfResult.message);
+                            response.pdfResult.files.forEach((file, index) => {
+                                console.log(`\n${index + 1}. ${file.name}`);
+                                console.log(`   Categoría: ${file.category || 'N/A'}`);
+                                console.log(`   Descripción: ${file.description || 'N/A'}`);
+                                console.log(`   Descargado en: ${file.path}`);
+                                console.log(`   URL: ${file.downloadUrl}`);
+                            });
+                        } else {
+                            console.log(response.pdfResult.message);
+                        }
+                        console.log('------------------');
+                    }
+
+                    console.log(`\nMessage ID: ${response.messageId}`);
                     console.log('\n-------------------\n');
                     askQuestion();
                 } catch (error) {
@@ -248,3 +405,7 @@ async function startChat() {
 
 export { AgenticRAGSystem };
 
+// Si se ejecuta directamente, iniciar el chat
+if (import.meta.main) {
+    startChat();
+}
