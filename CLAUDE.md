@@ -1,0 +1,2 @@
+- genera codigo limpio y sin emojis
+- no crees ni  modifiques documentacion hasta que te lo pida
