@@ -40,7 +40,7 @@ class AgenticRAGSystem {
         });
 
         this.sessionId = uuidv4();
-        this.downloadsDir = './downloads';
+        this.downloadsDir = process.env.NODE_ENV === 'production' ? '/tmp/downloads' : './downloads';
         this.mcpTools = null;
         this.model = null;
         this.agentGraph = null;

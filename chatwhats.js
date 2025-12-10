@@ -98,27 +98,42 @@ app.use(express.json());
 const whatsappClient = new WhatsAppClient();
 const agenticRAG = new AgenticRAGSystem();
 
-(async () => {
+let initialized = false;
+
+async function initializeBot() {
+    if (initialized) return;
+
     try {
+        console.log("Inicializando bot...");
         await fs.mkdir(tempDir, { recursive: true });
         await agenticRAG.initVectorStore();
         await agenticRAG.initMCPTools();
         console.log("WhatsApp Bot iniciado, vector store y MCP tools inicializados.");
+        initialized = true;
 
         if (process.send) {
             process.send('ready');
         }
     } catch (error) {
         console.error("Error inicializando:", error);
-        process.exit(1);
+        if (process.env.NODE_ENV !== 'production') {
+            process.exit(1);
+        }
+        throw error;
     }
-})();
+}
+
+if (process.env.NODE_ENV !== 'production') {
+    await initializeBot();
+}
 
 app.get('/', (req, res) => {
     res.send('<h1>WhatsApp Bot - Asistente de Viaje</h1>');
 });
 
-app.get('/webhook', (req, res) => {
+app.get('/webhook', async (req, res) => {
+    await initializeBot();
+
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
@@ -134,6 +149,8 @@ app.get('/webhook', (req, res) => {
 
 app.post('/webhook', async (req, res) => {
     try {
+        await initializeBot();
+
         console.log('========== WEBHOOK POST RECIBIDO ==========');
         console.log('Headers:', JSON.stringify(req.headers, null, 2));
         console.log('Body:', JSON.stringify(req.body, null, 2));
@@ -291,20 +308,22 @@ app.post('/send-message', async (req, res) => {
     }
 });
 
-const server = app.listen(PORT, () => {
-    console.log(`Servidor de WhatsApp ejecutándose en puerto ${PORT}`);
-});
+if (process.env.NODE_ENV !== 'production') {
+    const server = app.listen(PORT, () => {
+        console.log(`Servidor de WhatsApp ejecutándose en puerto ${PORT}`);
+    });
 
-process.on('SIGINT', () => {
-    server.close();
-    console.log('Servidor de WhatsApp detenido');
-    process.exit(0);
-});
+    process.on('SIGINT', () => {
+        server.close();
+        console.log('Servidor de WhatsApp detenido');
+        process.exit(0);
+    });
 
-process.on('SIGTERM', () => {
-    server.close();
-    console.log('Servidor de WhatsApp detenido');
-    process.exit(0);
-});
+    process.on('SIGTERM', () => {
+        server.close();
+        console.log('Servidor de WhatsApp detenido');
+        process.exit(0);
+    });
+}
 
 export default app;
