@@ -1,5 +1,4 @@
 {
-  "buildCommand": "npm run vercel-build",
   "installCommand": "npm install --legacy-peer-deps",
   "functions": {
     "api/index.js": {
