@@ -1,0 +1,14 @@
+node_modules
+downloads
+fwdviajemiguelyvero
+
+.gitignore
+.env.example
+*.md
+.vercel
+.vercelignore
+vercel.json
+api
+*.log
+npm-debug.log*
+.DS_Store
