@@ -6,17 +6,26 @@ if (!globalThis.fetch) {
 import { OpenAIEmbeddings, ChatOpenAI } from "@langchain/openai";
 import { createClient } from "@supabase/supabase-js";
 import { SupabaseVectorStore } from "@langchain/community/vectorstores/supabase";
+import { HumanMessage } from "@langchain/core/messages";
+import { StateGraph, START, END, MessagesAnnotation, Annotation } from "@langchain/langgraph";
+import { MemorySaver } from "@langchain/langgraph";
+import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { MultiServerMCPClient } from "@langchain/mcp-adapters";
-import { createAgent, tool } from "langchain";
-import { z } from "zod";
 import readline from 'readline';
 import { v4 as uuidv4 } from 'uuid';
 import dotenv from "dotenv";
-import { PDFStorage } from './pdf-storage.js';
 import fs from 'fs/promises';
 import path from 'path';
 
 dotenv.config();
+
+const StateAnnotation = Annotation.Root({
+    ...MessagesAnnotation.spec,
+    downloadedFiles: Annotation({
+        reducer: (left, right) => right ?? left ?? [],
+        default: () => []
+    })
+});
 
 class AgenticRAGSystem {
     constructor() {
@@ -30,18 +39,11 @@ class AgenticRAGSystem {
             openAIApiKey: process.env.OPENAI_API_KEY,
         });
 
-        this.pdfStorage = new PDFStorage();
         this.sessionId = uuidv4();
-        this.conversationHistory = "";
         this.downloadsDir = './downloads';
-        this.mcpClient = null;
-        this.agent = null;
-        this.model = new ChatOpenAI({
-            modelName: "gpt-4o-mini",
-            temperature: 0.7,
-            maxTokens: 2048,
-            openAIApiKey: process.env.OPENAI_API_KEY,
-        });
+        this.mcpTools = null;
+        this.model = null;
+        this.agentGraph = null;
     }
 
     async initVectorStore() {
@@ -56,124 +58,54 @@ class AgenticRAGSystem {
         return this.vectorStore;
     }
 
-    async initMCPAgent() {
+    async initMCPTools() {
         try {
-            // Crear tools personalizadas
-            const getCurrentDateTool = tool(
-                () => {
-                    const now = new Date();
-                    const dateOptions = {
-                        weekday: 'long',
-                        year: 'numeric',
-                        month: 'long',
-                        day: 'numeric',
-                        timeZone: 'Europe/Paris'
-                    };
-                    const timeOptions = {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        timeZone: 'Europe/Paris',
-                        timeZoneName: 'short'
-                    };
-                    const dateStr = now.toLocaleDateString('es-ES', dateOptions);
-                    const timeStr = now.toLocaleTimeString('es-ES', timeOptions);
-                    return `${dateStr}, ${timeStr}`;
-                },
-                {
-                    name: "obtener_fecha_actual",
-                    description: "Obtiene la fecha y hora actual en zona horaria de Europa Central (CET/CEST). Úsala cuando el usuario pregunte qué día es hoy, qué hora es, o necesites saber la fecha actual.",
-                    schema: z.object({})
-                }
-            );
+            const mcpConfig = JSON.parse(await fs.readFile('mcp.json', 'utf-8'));
+            const supabaseConfig = mcpConfig.mcpServers.supabase;
 
-            const searchRAGTool = tool(
-                async ({ pregunta }) => {
-                    const retriever = this.vectorStore.asRetriever({ k: 5 });
-                    const docs = await retriever.invoke(pregunta);
-                    const context = docs.map(doc => doc.pageContent).join('\n\n');
-
-                    const prompt = `Basándote en el siguiente contexto del itinerario de viaje, responde la pregunta del usuario de manera concisa y útil.
-
-Contexto:
-${context}
-
-Pregunta: ${pregunta}
-
-Respuesta:`;
-
-                    const response = await this.model.invoke(prompt);
-                    return typeof response === 'string' ? response : response.content;
-                },
-                {
-                    name: "buscar_en_itinerario",
-                    description: "Busca información en el itinerario de viaje (vuelos, hoteles, tours, actividades, etc.). Usa esta herramienta cuando el usuario pregunte sobre su viaje, horarios, direcciones, reservas, o cualquier información del itinerario.",
-                    schema: z.object({
-                        pregunta: z.string().describe("La pregunta del usuario sobre el itinerario")
-                    })
-                }
-            );
-
-            const searchPDFTool = tool(
-                async ({ solicitud }) => {
-                    const result = await this.downloadRequestedPDF(solicitud);
-                    if (result.found) {
-                        const fileList = result.files.map(f => `- ${f.name} (${f.category})`).join('\n');
-                        return `Encontré los siguientes documentos:\n${fileList}\n\nLos documentos han sido descargados y están disponibles.`;
-                    } else {
-                        return result.message;
-                    }
-                },
-                {
-                    name: "buscar_y_descargar_documento",
-                    description: "Busca y descarga documentos PDF específicos (boletos, reservas, confirmaciones, etc.). Usa esta herramienta cuando el usuario solicite explícitamente un documento o PDF.",
-                    schema: z.object({
-                        solicitud: z.string().describe("Descripción del documento que el usuario está solicitando (ej: 'boletos museo vaticano', 'reserva hotel roma')")
-                    })
-                }
-            );
-
-            // Obtener tools del MCP de Supabase
-            let mcpTools = [];
-            try {
-                const mcpConfig = JSON.parse(await fs.readFile('mcp.json', 'utf-8'));
-                const supabaseConfig = mcpConfig.mcpServers.supabase;
-
-                if (supabaseConfig) {
-                    this.mcpClient = new MultiServerMCPClient({
-                        supabase: {
-                            transport: "http",
-                            url: supabaseConfig.url,
-                            headers: supabaseConfig.headers
-                        }
-                    });
-
-                    mcpTools = await this.mcpClient.getTools();
-                    console.log(`MCP Tools de Supabase: ${mcpTools.length} disponibles`);
-                }
-            } catch (mcpError) {
-                console.warn('No se pudieron cargar MCP tools:', mcpError.message);
+            if (!supabaseConfig) {
+                console.warn('No se encontró configuración de Supabase MCP, continuando sin MCP tools');
+                this.mcpTools = [];
+                this.model = new ChatOpenAI({
+                    modelName: "gpt-4o-mini",
+                    temperature: 0.7,
+                    maxTokens: 2048,
+                    openAIApiKey: process.env.OPENAI_API_KEY,
+                });
+                await this.initAgentGraph();
+                return;
             }
 
-            // Combinar todas las tools
-            const allTools = [
-                getCurrentDateTool,
-                searchRAGTool,
-                searchPDFTool,
-                ...mcpTools
-            ];
-
-            console.log(`Total de tools: ${allTools.length} (${allTools.length - mcpTools.length} personalizadas + ${mcpTools.length} MCP)`);
-
-            // Crear el agente con todas las tools
-            this.agent = createAgent({
-                model: "gpt-4o-mini",
-                tools: allTools,
+            const mcpClient = new MultiServerMCPClient({
+                supabase: {
+                    transport: supabaseConfig.transport,
+                    url: supabaseConfig.url,
+                    headers: supabaseConfig.headers
+                }
             });
 
-            console.log('Agente unificado creado correctamente');
+            this.mcpTools = await mcpClient.getTools();
+            console.log(`MCP Tools inicializadas: ${this.mcpTools.length} tools disponibles`);
+
+            this.model = new ChatOpenAI({
+                modelName: "gpt-4o-mini",
+                temperature: 0.7,
+                maxTokens: 2048,
+                openAIApiKey: process.env.OPENAI_API_KEY,
+            }).bindTools(this.mcpTools);
+
+            await this.initAgentGraph();
+
         } catch (error) {
-            console.error('Error inicializando agente:', error);
-            throw error;
+            console.warn('Error inicializando MCP tools:', error.message);
+            this.mcpTools = [];
+            this.model = new ChatOpenAI({
+                modelName: "gpt-4o-mini",
+                temperature: 0.7,
+                maxTokens: 2048,
+                openAIApiKey: process.env.OPENAI_API_KEY,
+            });
+            await this.initAgentGraph();
         }
     }
 
@@ -191,109 +123,195 @@ Respuesta:`;
         }
     }
 
-    async getConversationHistory(userId, limit = 10) {
-        try {
-            const { data, error } = await this.supabase
-                .from('conversation_history')
-                .select('message, role, created_at')
-                .eq('user_id', userId)
-                .order('created_at', { ascending: false })
-                .limit(limit);
-
-            if (error) throw error;
-
-            return data.reverse().map(row =>
-                `${row.role === 'user' ? 'Usuario' : 'Asistente'}: ${row.message}`
-            ).join('\n');
-        } catch (error) {
-            console.error("Error recuperando historial:", error);
-            return "";
-        }
+    getCurrentDate() {
+        const now = new Date();
+        const dateOptions = {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            timeZone: 'Europe/Paris'
+        };
+        const timeOptions = {
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZone: 'Europe/Paris',
+            timeZoneName: 'short'
+        };
+        const dateStr = now.toLocaleDateString('es-ES', dateOptions);
+        const timeStr = now.toLocaleTimeString('es-ES', timeOptions);
+        return `${dateStr}, ${timeStr}`;
     }
 
-    async downloadRequestedPDF(pdfRequest) {
-        try {
-            let pdfs = [];
+    getShortDate() {
+        const now = new Date();
+        const parisTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+        const months = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'];
+        const month = months[parisTime.getMonth()];
+        const day = parisTime.getDate();
+        return `${month} ${day}`;
+    }
 
-            if (this.agent) {
-                console.log('Usando agente MCP para buscar documentos...');
+    async initAgentGraph() {
+        const agentNodeFunc = async (state) => {
+            const messages = state.messages;
+            const lastMsg = messages[messages.length - 1];
+
+            const retriever = this.vectorStore.asRetriever({ k: 15 });
+            const retrievedDocs = await retriever.invoke(lastMsg.content);
+            const formattedDocs = retrievedDocs
+                .map(doc => doc.pageContent)
+                .join('\n\n');
+
+            const currentDate = this.getCurrentDate();
+            const shortDate = this.getShortDate();
+
+            const systemPrompt = `Eres un asistente de viaje especializado en ayudar con el itinerario de una luna de miel en Europa.
+
+FECHA ACTUAL: ${currentDate}
+FECHA EN FORMATO ITINERARIO: ${shortDate}
+
+IMPORTANTE: Cuando el usuario pregunte sobre "hoy", "que tengo que hacer hoy", o actividades del día:
+1. Busca en el contexto la fecha "${shortDate}" en el itinerario
+2. Lee CUIDADOSAMENTE todos los eventos y horarios del día
+3. Incluye TODOS los horarios y actividades programadas (mañana, tarde, noche)
+4. No omitas ningún evento aunque parezca menor
+5. Revisa TODO el contexto recuperado para no perderte ninguna actividad
+
+Tu trabajo es proporcionar información útil sobre:
+- Horarios de vuelos, trenes y traslados
+- Direcciones y detalles de hoteles
+- Información sobre tours y actividades
+- Recomendaciones generales de viaje
+
+Tienes acceso a herramientas de Supabase para consultar la base de datos.
+
+Cuando el usuario solicite documentos, boletos, reservas o archivos PDF:
+1. USA la función SQL: SELECT * FROM get_pdf_download_url('palabra_clave')
+2. Reemplaza 'palabra_clave' con lo que el usuario busca (museo, boleto, hotel, etc.)
+3. La función devuelve: file_name, category, description, download_url
+4. SIEMPRE incluye las URLs de descarga en tu respuesta en formato Markdown:
+   - Ejemplo: [Nombre del documento](URL_completa)
+
+Categorías disponibles: boleto, hotel, traslado, tour, tren, itinerario
+
+Contexto recuperado de los documentos vectorizados:
+${formattedDocs}
+
+Responde de manera clara y concisa en formato Markdown.`;
+
+            const messagesWithSystem = [
+                { role: "system", content: systemPrompt },
+                ...messages
+            ];
+
+            const result = await this.model.invoke(messagesWithSystem);
+            return { messages: [result] };
+        };
+
+        const shouldContinue = (state) => {
+            const messages = state.messages;
+            const lastMessage = messages[messages.length - 1];
+
+            if (lastMessage.tool_calls && lastMessage.tool_calls.length > 0) {
+                return "tools";
+            }
+            return "postProcess";
+        };
+
+        const postProcessNode = async (state) => {
+            const messages = state.messages;
+            const lastMessage = messages[messages.length - 1];
+            const content = lastMessage.content || "";
+
+            console.log("Post-procesando respuesta...");
+            const urlRegex = /https:\/\/[^\s\)]+\.pdf/gi;
+            const urls = content.match(urlRegex);
+
+            if (!urls || urls.length === 0) {
+                console.log("No hay URLs de PDF para procesar");
+                return { messages: messages, downloadedFiles: [] };
+            }
+
+            console.log(`Descargando ${urls.length} archivo(s)...`);
+            await fs.mkdir(this.downloadsDir, { recursive: true });
+            const downloadedFiles = [];
+
+            for (const url of urls) {
                 try {
-                    const searchPrompt = `Busca en la tabla pdf_files los documentos relacionados con: "${pdfRequest}".
+                    const fileName = decodeURIComponent(url.split('/').pop());
+                    const localPath = path.join(this.downloadsDir, fileName);
 
-La tabla tiene las columnas: file_name, category, description.
-Usa SQL ILIKE para búsqueda flexible.
-Busca específicamente documentos que coincidan con las palabras clave importantes de la solicitud.
-Por ejemplo, si pide "boletos museo vaticano", busca documentos que contengan "vaticano" y "museo" en file_name o description, no solo todos los documentos con categoría "boleto".
+                    const response = await fetch(url);
+                    if (!response.ok) {
+                        console.error(`Error descargando ${fileName}: ${response.status}`);
+                        continue;
+                    }
 
-Devuelve el nombre del archivo (file_name), categoría y descripción de los documentos más relevantes.`;
+                    const buffer = await response.arrayBuffer();
+                    await fs.writeFile(localPath, Buffer.from(buffer));
 
-                    const agentResponse = await this.agent.invoke({
-                        messages: [{ role: "user", content: searchPrompt }],
+                    downloadedFiles.push({
+                        name: fileName,
+                        path: localPath,
+                        url: url
                     });
 
-                    console.log('Respuesta del agente MCP:', JSON.stringify(agentResponse, null, 2));
-
-                    const lastMessage = agentResponse.messages[agentResponse.messages.length - 1];
-                    const content = lastMessage.content;
-
-                    if (content && content.length > 0) {
-                        const fileNames = content.match(/[\w\s]+\.pdf/gi) || [];
-
-                        for (const fileName of fileNames) {
-                            const pdfInfo = await this.pdfStorage.getPDFWithURL(fileName.trim());
-                            if (pdfInfo) {
-                                pdfs.push(pdfInfo);
-                            }
-                        }
-                    }
-                } catch (mcpError) {
-                    console.warn('Error usando agente MCP:', mcpError.message);
-                    console.log('Fallback a búsqueda tradicional...');
+                    console.log(`✓ Descargado: ${fileName}`);
+                } catch (error) {
+                    console.error(`Error descargando archivo de ${url}:`, error.message);
                 }
             }
 
-            if (pdfs.length === 0) {
-                console.log('Usando búsqueda tradicional...');
-                pdfs = await this.pdfStorage.searchPDFIntelligent(pdfRequest);
-            }
+            let modifiedContent = content;
 
-            if (pdfs.length === 0) {
-                return {
-                    found: false,
-                    message: `No se encontró ningún documento relacionado con "${pdfRequest}"`
-                };
-            }
+            const markdownLinkRegex = /\[([^\]]+)\]\(https:\/\/[^\)]+\.pdf\)/gi;
+            modifiedContent = modifiedContent.replace(markdownLinkRegex, (match, linkText) => {
+                return `📎 ${linkText}`;
+            });
 
-            await fs.mkdir(this.downloadsDir, { recursive: true });
+            modifiedContent = modifiedContent.replace(urlRegex, '');
 
-            const downloadedFiles = [];
-            for (const pdf of pdfs) {
-                const buffer = await this.pdfStorage.downloadPDFBuffer(pdf.file_name);
-                const localPath = path.join(this.downloadsDir, pdf.file_name);
-                await fs.writeFile(localPath, buffer);
+            modifiedContent = modifiedContent.replace(/\n{3,}/g, '\n\n');
+            modifiedContent = modifiedContent.trim();
 
-                downloadedFiles.push({
-                    name: pdf.file_name,
-                    path: localPath,
-                    category: pdf.category,
-                    description: pdf.description,
-                    downloadUrl: pdf.downloadUrl
-                });
-            }
+            const modifiedMessages = [...messages];
+            modifiedMessages[modifiedMessages.length - 1] = {
+                ...lastMessage,
+                content: modifiedContent
+            };
 
             return {
-                found: true,
-                files: downloadedFiles,
-                message: `Se encontró(n) ${downloadedFiles.length} documento(s)`
+                messages: modifiedMessages,
+                downloadedFiles: downloadedFiles
             };
-        } catch (error) {
-            console.error('Error descargando PDF:', error);
-            return {
-                found: false,
-                error: true,
-                message: `Error al buscar o descargar el documento: ${error.message}`
-            };
+        };
+
+        const workflow = new StateGraph(StateAnnotation)
+            .addNode("agent", agentNodeFunc)
+            .addNode("postProcess", postProcessNode)
+            .addEdge(START, "agent");
+
+        if (this.mcpTools && this.mcpTools.length > 0) {
+            const toolNode = new ToolNode(this.mcpTools);
+            workflow
+                .addNode("tools", toolNode)
+                .addConditionalEdges("agent", shouldContinue, {
+                    tools: "tools",
+                    postProcess: "postProcess"
+                })
+                .addEdge("tools", "agent");
+        } else {
+            workflow.addConditionalEdges("agent", shouldContinue, {
+                postProcess: "postProcess"
+            });
         }
+
+        workflow.addEdge("postProcess", END);
+
+        const checkpointer = new MemorySaver();
+        this.agentGraph = workflow.compile({ checkpointer });
+        console.log("Grafo del agente compilado exitosamente");
     }
 
     async processQuery(question, userId = null) {
@@ -301,39 +319,33 @@ Devuelve el nombre del archivo (file_name), categoría y descripción de los doc
             const messageId = uuidv4();
             console.log("Procesando pregunta:", question);
 
-            if (!this.agent) {
-                throw new Error("El agente no ha sido inicializado. Llama a initMCPAgent() primero.");
+            if (!this.agentGraph) {
+                throw new Error("El grafo del agente no está inicializado");
             }
 
-            // Usar el agente unificado para responder
-            const response = await this.agent.invoke({
-                messages: [{ role: "user", content: question }],
+            const graphState = await this.agentGraph.invoke({
+                messages: [new HumanMessage(question)],
+            }, {
+                configurable: {
+                    thread_id: this.sessionId,
+                },
             });
 
-            // Extraer la respuesta final
-            const lastMessage = response.messages[response.messages.length - 1];
-            const answer = typeof lastMessage.content === 'string'
-                ? lastMessage.content
-                : JSON.stringify(lastMessage.content);
+            const messages = graphState.messages;
+            const lastMessage = messages[messages.length - 1];
+            const answer = lastMessage.content || "";
+            const downloadedFiles = graphState.downloadedFiles || [];
 
-            // Guardar en historial si hay userId
             if (userId) {
                 await this.saveConversationHistory(userId, question, 'user');
                 await this.saveConversationHistory(userId, answer, 'assistant');
             }
 
-            // Actualizar historial en memoria
-            this.conversationHistory += `Usuario: ${question}\nAsistente: ${answer}\n`;
-
-            // Verificar si se descargaron PDFs (revisando el contenido de la respuesta)
-            const pdfMentioned = answer.toLowerCase().includes('documento') ||
-                                answer.toLowerCase().includes('descargado');
-
             return {
                 messageId,
                 sessionId: this.sessionId,
-                answer,
-                pdfResult: pdfMentioned ? { found: true, message: "Documentos procesados" } : null,
+                answer: answer,
+                downloadedFiles: downloadedFiles,
             };
         } catch (error) {
             console.error("Error procesando la consulta:", error);
@@ -354,8 +366,8 @@ async function startChat() {
         const agenticRAG = new AgenticRAGSystem();
         console.log("2. Inicializando vector store...");
         await agenticRAG.initVectorStore();
-        console.log("3. Inicializando MCP agent...");
-        await agenticRAG.initMCPAgent();
+        console.log("3. Inicializando MCP tools...");
+        await agenticRAG.initMCPTools();
         console.log(`4. Sistema listo! [Session ID: ${agenticRAG.sessionId}]`);
         console.log("Escribe tu pregunta o 'salir' para terminar\n");
 
@@ -369,21 +381,14 @@ async function startChat() {
                     const response = await agenticRAG.processQuery(question);
                     console.log('\nRespuesta:', response.answer);
 
-                    if (response.pdfResult) {
-                        console.log('\n--- DOCUMENTOS ---');
-                        if (response.pdfResult.found) {
-                            console.log(response.pdfResult.message);
-                            response.pdfResult.files.forEach((file, index) => {
-                                console.log(`\n${index + 1}. ${file.name}`);
-                                console.log(`   Categoría: ${file.category || 'N/A'}`);
-                                console.log(`   Descripción: ${file.description || 'N/A'}`);
-                                console.log(`   Descargado en: ${file.path}`);
-                                console.log(`   URL: ${file.downloadUrl}`);
-                            });
-                        } else {
-                            console.log(response.pdfResult.message);
-                        }
-                        console.log('------------------');
+                    if (response.downloadedFiles && response.downloadedFiles.length > 0) {
+                        console.log('\n--- ARCHIVOS DESCARGADOS ---');
+                        response.downloadedFiles.forEach((file, index) => {
+                            console.log(`\n${index + 1}. ${file.name}`);
+                            console.log(`   Ruta local: ${file.path}`);
+                            console.log(`   URL: ${file.url}`);
+                        });
+                        console.log('---------------------------');
                     }
 
                     console.log(`\nMessage ID: ${response.messageId}`);

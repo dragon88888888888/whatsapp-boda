@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "supabase": {
-      "transport": "streamable_http",
+      "transport": "http",
       "url": "https://mcp.supabase.com/mcp?project_ref=eexonhqejvuggdsxthua",
       "headers": {
         "Authorization": "Bearer sbp_ab16e99a2e2dbe18dfbb143f2ab8df4e746f24f4"

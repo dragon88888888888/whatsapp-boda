@@ -7,7 +7,6 @@ import os from 'os';
 dotenv.config();
 
 import { AgenticRAGSystem } from './rag-chat.js';
-import { PDFStorage } from './pdf-storage.js';
 
 const WHATSAPP_API_TOKEN = process.env.WHATSAPP_API_TOKEN;
 const WHATSAPP_CLOUD_NUMBER_ID = process.env.WHATSAPP_CLOUD_NUMBER_ID;
@@ -22,7 +21,7 @@ const tempDir = path.join(os.tmpdir(), 'whatsapp_wedding');
 
 class WhatsAppClient {
     constructor() {
-        this.API_URL = `https://graph.facebook.com/v20.0/${WHATSAPP_CLOUD_NUMBER_ID}`;
+        this.API_URL = `https://graph.facebook.com/v24.0/${WHATSAPP_CLOUD_NUMBER_ID}`;
         this.headers = {
             'Authorization': `Bearer ${WHATSAPP_API_TOKEN}`,
             'Content-Type': 'application/json'
@@ -98,14 +97,13 @@ app.use(express.json());
 
 const whatsappClient = new WhatsAppClient();
 const agenticRAG = new AgenticRAGSystem();
-const pdfStorage = new PDFStorage();
 
 (async () => {
     try {
         await fs.mkdir(tempDir, { recursive: true });
         await agenticRAG.initVectorStore();
-        await agenticRAG.initMCPAgent();
-        console.log("WhatsApp Bot iniciado, vector store y MCP agent inicializados.");
+        await agenticRAG.initMCPTools();
+        console.log("WhatsApp Bot iniciado, vector store y MCP tools inicializados.");
 
         if (process.send) {
             process.send('ready');
@@ -136,6 +134,11 @@ app.get('/webhook', (req, res) => {
 
 app.post('/webhook', async (req, res) => {
     try {
+        console.log('========== WEBHOOK POST RECIBIDO ==========');
+        console.log('Headers:', JSON.stringify(req.headers, null, 2));
+        console.log('Body:', JSON.stringify(req.body, null, 2));
+        console.log('==========================================');
+
         res.sendStatus(200);
 
         const data = req.body;
@@ -194,59 +197,47 @@ También puedo enviarles documentos específicos como boletos, reservas de hotel
                     // Enviar la respuesta principal
                     await whatsappClient.sendTextMessage(response.answer, senderPhone);
 
-                    // Si se detectó una solicitud de PDF y se encontraron documentos
-                    if (response.pdfResult) {
-                        console.log(`Solicitud de PDF procesada: ${response.pdfRequest}`);
+                    // Si hay archivos descargados, enviarlos
+                    if (response.downloadedFiles && response.downloadedFiles.length > 0) {
+                        console.log(`Enviando ${response.downloadedFiles.length} documento(s)...`);
 
                         try {
-                            if (response.pdfResult.found && response.pdfResult.files.length > 0) {
-                                const pdfs = response.pdfResult.files;
+                            const files = response.downloadedFiles;
 
-                                await whatsappClient.sendTextMessage(
-                                    `${response.pdfResult.message}. Enviando...`,
-                                    senderPhone
-                                );
-
-                                // Enviar los primeros 3 PDFs encontrados
-                                const maxPDFs = Math.min(pdfs.length, 3);
-                                for (let i = 0; i < maxPDFs; i++) {
-                                    const pdf = pdfs[i];
-                                    try {
-                                        await whatsappClient.sendDocument(
-                                            senderPhone,
-                                            pdf.downloadUrl,
-                                            pdf.name,
-                                            pdf.description || pdf.category || ''
-                                        );
-                                        console.log(`PDF enviado: ${pdf.name}`);
-                                    } catch (sendError) {
-                                        console.error(`Error enviando PDF ${pdf.name}:`, sendError);
-                                        await whatsappClient.sendTextMessage(
-                                            `No pude enviar el documento "${pdf.name}". Intenta de nuevo más tarde.`,
-                                            senderPhone
-                                        );
-                                    }
-
-                                    // Pequeña pausa entre documentos
-                                    await new Promise(resolve => setTimeout(resolve, 1000));
-                                }
-
-                                if (pdfs.length > 3) {
+                            // Enviar los primeros 3 PDFs encontrados
+                            const maxPDFs = Math.min(files.length, 3);
+                            for (let i = 0; i < maxPDFs; i++) {
+                                const file = files[i];
+                                try {
+                                    await whatsappClient.sendDocument(
+                                        senderPhone,
+                                        file.url,
+                                        file.name,
+                                        ''
+                                    );
+                                    console.log(`✓ PDF enviado: ${file.name}`);
+                                } catch (sendError) {
+                                    console.error(`Error enviando PDF ${file.name}:`, sendError);
                                     await whatsappClient.sendTextMessage(
-                                        `Se encontraron ${pdfs.length - 3} documento(s) adicional(es). ¿Quieres que te los envíe también?`,
+                                        `No pude enviar el documento "${file.name}". Intenta de nuevo más tarde.`,
                                         senderPhone
                                     );
                                 }
-                            } else {
+
+                                // Pequeña pausa entre documentos
+                                await new Promise(resolve => setTimeout(resolve, 1500));
+                            }
+
+                            if (files.length > 3) {
                                 await whatsappClient.sendTextMessage(
-                                    response.pdfResult.message || `No encontré documentos relacionados. Puedes ser más específico o preguntarme sobre categorías como: boletos, hoteles, traslados, tours, trenes.`,
+                                    `Tengo ${files.length - 3} documento(s) adicional(es). ¿Quieres que te los envíe también?`,
                                     senderPhone
                                 );
                             }
                         } catch (pdfError) {
-                            console.error("Error enviando PDF:", pdfError);
+                            console.error("Error enviando documentos:", pdfError);
                             await whatsappClient.sendTextMessage(
-                                `Hubo un error al enviar el documento. Por favor, intenta de nuevo.`,
+                                `Hubo un error al enviar los documentos. Por favor, intenta de nuevo.`,
                                 senderPhone
                             );
                         }

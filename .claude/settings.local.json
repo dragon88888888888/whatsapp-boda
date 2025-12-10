@@ -8,7 +8,9 @@
       "mcp__supabase__list_extensions",
       "mcp__supabase__execute_sql",
       "WebFetch(domain:docs.langchain.com)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:developers.facebook.com)",
+      "WebFetch(domain:support.bolddesk.com)"
     ]
   },
   "enableAllProjectMcpServers": true,
