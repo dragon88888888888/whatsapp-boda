@@ -21,7 +21,7 @@ After=network.target
 Type=simple
 User=$USER
 WorkingDirectory=$WORKDIR
-ExecStart=$BUN_PATH run chatwhats.js
+ExecStart=bun chatwhats.js
 Restart=always
 RestartSec=10
 Environment=NODE_ENV=production
