@@ -3,7 +3,6 @@ services:
   whatsapp-bot:
     build: .
     container_name: whatsapp-wedding-bot
-    restart: unless-stopped
     ports:
       - "5000:5000"
     env_file:
