@@ -10,24 +10,25 @@
     "dev": "nodemon chatwhats.js",
     "index": "node document-index.js",
     "upload-pdfs": "node pdf-storage.js",
-    "chat": "node rag-chat.js"
+    "chat": "node rag-chat.js",
+    "vercel-build": "npm install --legacy-peer-deps"
   },
   "dependencies": {
-    "@langchain/community": "latest",
-    "@langchain/core": "latest",
-    "@langchain/langgraph": "latest",
+    "@langchain/community": "^0.3.17",
+    "@langchain/core": "^0.3.23",
+    "@langchain/langgraph": "^0.2.31",
     "@langchain/mcp-adapters": "^1.0.3",
-    "@langchain/openai": "latest",
-    "@langchain/textsplitters": "latest",
-    "@supabase/supabase-js": "latest",
-    "dotenv": "latest",
-    "express": "latest",
-    "langchain": "latest",
-    "node-fetch": "latest",
-    "openai": "latest",
-    "pdf-parse": "^1",
-    "uuid": "latest",
-    "zod": "latest"
+    "@langchain/openai": "^0.3.16",
+    "@langchain/textsplitters": "^0.1.0",
+    "@supabase/supabase-js": "^2.49.2",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "langchain": "^0.3.9",
+    "node-fetch": "^3.3.2",
+    "openai": "^4.77.3",
+    "pdf-parse": "^1.1.1",
+    "uuid": "^11.0.4",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
