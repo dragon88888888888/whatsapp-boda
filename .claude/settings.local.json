@@ -10,7 +10,8 @@
       "WebFetch(domain:docs.langchain.com)",
       "WebSearch",
       "WebFetch(domain:developers.facebook.com)",
-      "WebFetch(domain:support.bolddesk.com)"
+      "WebFetch(domain:support.bolddesk.com)",
+      "WebFetch(domain:bun.sh)"
     ]
   },
   "enableAllProjectMcpServers": true,
