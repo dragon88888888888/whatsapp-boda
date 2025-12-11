@@ -1,0 +1,7 @@
+{
+  "allowedNumbers": [
+    "5219999999999",
+    "5218888888888"
+  ],
+  "description": "Lista de números de teléfono permitidos (formato: código país + número sin + ni espacios)"
+}

@@ -19,12 +19,11 @@ After=network.target
 
 [Service]
 Type=simple
-User=$USER
+User=root
 WorkingDirectory=$WORKDIR
-ExecStart=bun chatwhats.js
+ExecStart=$BUN_PATH run chatwhats.js
 Restart=always
 RestartSec=10
-Environment=NODE_ENV=production
 StandardOutput=journal
 StandardError=journal
 
