@@ -143,7 +143,7 @@ async function initializeBot() {
 await initializeBot();
 
 app.get('/', (req, res) => {
-    res.send('<h1>WhatsApp Bot - Asistente de Viaje (Evolution API)</h1>');
+    res.send('<h1>WhatsApp Bot - Agente de Viajes (Evolution API)</h1>');
 });
 
 app.post('/webhook', async (req, res) => {
@@ -176,11 +176,7 @@ app.post('/webhook', async (req, res) => {
         }
 
         if (!isNumberAllowed(senderPhone)) {
-            console.log(`Número no permitido: ${senderPhone}`);
-            await evolutionClient.sendTextMessage(
-                'Lo siento, este bot solo está disponible para invitados autorizados.',
-                senderPhone
-            );
+            console.log(`Número no permitido: ${senderPhone} - ignorando mensaje`);
             return;
         }
 
@@ -203,19 +199,20 @@ app.post('/webhook', async (req, res) => {
         console.log(`Mensaje recibido de ${senderPhone}: ${text}`);
 
         if (text.trim().toLowerCase() === 'hola' || text.trim().toLowerCase() === 'start') {
-            const welcomeMessage = `¡Bienvenidos Miguel y Vero a su asistente de viaje!
+            const welcomeMessage = `Bienvenido a tu agente de viajes virtual.
 
-Estoy aquí para ayudarlos con su itinerario de luna de miel por Europa.
+Estoy aqui para ayudarte con toda la informacion sobre tus viajes.
 
-Pueden preguntarme sobre:
+Puedes preguntarme sobre:
+- Destinos y recomendaciones
 - Horarios de vuelos y trenes
-- Direcciones de hoteles
-- Detalles de tours y actividades
-- Información general del itinerario
+- Hoteles y alojamientos
+- Tours y actividades
+- Documentacion de viaje
 
-También puedo enviarles documentos específicos como boletos, reservas de hotel, etc.
+Tambien puedo enviarte documentos como boletos, reservas, itinerarios, etc.
 
-¿En qué puedo ayudarlos?`;
+En que puedo ayudarte?`;
             await evolutionClient.sendTextMessage(welcomeMessage, senderPhone);
         }
         else {

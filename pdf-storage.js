@@ -11,7 +11,7 @@ class PDFStorage {
             process.env.SUPABASE_URL,
             process.env.SUPABASE_SERVICE_KEY
         );
-        this.bucketName = 'wedding-documents';
+        this.bucketName = 'mundial';
     }
 
     async uploadPDF(filePath, fileName = null) {
@@ -213,7 +213,7 @@ async function uploadInitialPDFs() {
     const storage = new PDFStorage();
 
     try {
-        await storage.uploadAllPDFsFromDirectory('./fwdviajemiguelyvero');
+        await storage.uploadAllPDFsFromDirectory('./mundial-20260123T012440Z-3-001/mundial');
         console.log("\n¡Subida completada!");
     } catch (error) {
         console.error("Error durante la subida:", error);

@@ -128,7 +128,7 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 app.get('/', (req, res) => {
-    res.send('<h1>WhatsApp Bot - Asistente de Viaje</h1>');
+    res.send('<h1>WhatsApp Bot - Agente de Viajes</h1>');
 });
 
 app.get('/webhook', async (req, res) => {
@@ -191,19 +191,20 @@ app.post('/webhook', async (req, res) => {
 
             // Mensaje de bienvenida
             if (text.trim().toLowerCase() === 'hola' || text.trim().toLowerCase() === 'start') {
-                const welcomeMessage = `¡Bienvenidos Miguel y Vero a su asistente de viaje!
+                const welcomeMessage = `Bienvenido a tu agente de viajes virtual.
 
-Estoy aquí para ayudarlos con su itinerario de luna de miel por Europa.
+Estoy aqui para ayudarte con toda la informacion sobre tus viajes.
 
-Pueden preguntarme sobre:
+Puedes preguntarme sobre:
+- Destinos y recomendaciones
 - Horarios de vuelos y trenes
-- Direcciones de hoteles
-- Detalles de tours y actividades
-- Información general del itinerario
+- Hoteles y alojamientos
+- Tours y actividades
+- Documentacion de viaje
 
-También puedo enviarles documentos específicos como boletos, reservas de hotel, etc.
+Tambien puedo enviarte documentos como boletos, reservas, itinerarios, etc.
 
-¿En qué puedo ayudarlos?`;
+En que puedo ayudarte?`;
                 await whatsappClient.sendTextMessage(welcomeMessage, senderPhone);
             }
             else {

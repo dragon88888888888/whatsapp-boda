@@ -129,27 +129,16 @@ class AgenticRAGSystem {
             weekday: 'long',
             year: 'numeric',
             month: 'long',
-            day: 'numeric',
-            timeZone: 'Europe/Paris'
+            day: 'numeric'
         };
         const timeOptions = {
             hour: '2-digit',
             minute: '2-digit',
-            timeZone: 'Europe/Paris',
             timeZoneName: 'short'
         };
         const dateStr = now.toLocaleDateString('es-ES', dateOptions);
         const timeStr = now.toLocaleTimeString('es-ES', timeOptions);
         return `${dateStr}, ${timeStr}`;
-    }
-
-    getShortDate() {
-        const now = new Date();
-        const parisTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
-        const months = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'];
-        const month = months[parisTime.getMonth()];
-        const day = parisTime.getDate();
-        return `${month} ${day}`;
     }
 
     async initAgentGraph() {
@@ -164,36 +153,31 @@ class AgenticRAGSystem {
                 .join('\n\n');
 
             const currentDate = this.getCurrentDate();
-            const shortDate = this.getShortDate();
 
-            const systemPrompt = `Eres un asistente de viaje especializado en ayudar con el itinerario de una luna de miel en Europa.
+            const systemPrompt = `Eres un agente de viajes profesional. Tu trabajo es ayudar a los usuarios con informacion sobre destinos, itinerarios, reservas y todo lo relacionado con viajes.
 
 FECHA ACTUAL: ${currentDate}
-FECHA EN FORMATO ITINERARIO: ${shortDate}
 
-IMPORTANTE: Cuando el usuario pregunte sobre "hoy", "que tengo que hacer hoy", o actividades del día:
-1. Busca en el contexto la fecha "${shortDate}" en el itinerario
-2. Lee CUIDADOSAMENTE todos los eventos y horarios del día
-3. Incluye TODOS los horarios y actividades programadas (mañana, tarde, noche)
-4. No omitas ningún evento aunque parezca menor
-5. Revisa TODO el contexto recuperado para no perderte ninguna actividad
-
-Tu trabajo es proporcionar información útil sobre:
+Tu trabajo es proporcionar informacion util sobre:
+- Destinos turisticos y recomendaciones
 - Horarios de vuelos, trenes y traslados
-- Direcciones y detalles de hoteles
-- Información sobre tours y actividades
-- Recomendaciones generales de viaje
+- Hoteles y alojamientos
+- Tours, actividades y experiencias
+- Documentacion necesaria para viajar
+- Consejos practicos de viaje
+
+Contesta unicamente con la informacion que tienes disponible en los documentos proporcionados. No inventes respuestas. Si no tienes informacion sobre algo, indicalo claramente.
 
 Tienes acceso a herramientas de Supabase para consultar la base de datos.
 
 Cuando el usuario solicite documentos, boletos, reservas o archivos PDF:
-1. USA la función SQL: SELECT * FROM get_pdf_download_url('palabra_clave')
+1. USA la funcion SQL: SELECT * FROM get_pdf_download_url('palabra_clave')
 2. Reemplaza 'palabra_clave' con lo que el usuario busca (museo, boleto, hotel, etc.)
-3. La función devuelve: file_name, category, description, download_url
+3. La funcion devuelve: file_name, category, description, download_url
 4. SIEMPRE incluye las URLs de descarga en tu respuesta en formato Markdown:
    - Ejemplo: [Nombre del documento](URL_completa)
 
-Categorías disponibles: boleto, hotel, traslado, tour, tren, itinerario
+Categorias disponibles: bares, tacos, tortas, comida-fit, general
 
 Contexto recuperado de los documentos vectorizados:
 ${formattedDocs}

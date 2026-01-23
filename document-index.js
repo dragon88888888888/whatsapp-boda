@@ -44,39 +44,28 @@ async function loadPDFsFromDirectory(directoryPath) {
     return allDocs;
 }
 
-// Función para categorizar documentos según su nombre
+// Funcion para categorizar documentos segun su nombre
 function categorizeDocument(fileName) {
     const lower = fileName.toLowerCase();
 
-    // Itinerario - archivo principal
-    if (lower.includes('luna de miel') || lower.includes('itinerario') || lower.includes('europa miguel')) {
-        return 'itinerario';
+    if (lower.includes('bar') || lower.includes('bares')) {
+        return 'bares';
     }
 
-    // Boletos de avión o tren
-    if (lower.includes('tkt') || lower.includes('ticket') || lower.includes('boleto')) {
-        return 'boleto';
+    if (lower.includes('taco') || lower.includes('tacos')) {
+        return 'tacos';
     }
 
-    // Hoteles
-    if (lower.includes('hotel') || lower.includes('htl')) {
-        return 'hotel';
+    if (lower.includes('torta') || lower.includes('tortas')) {
+        return 'tortas';
     }
 
-    // Traslados
-    if (lower.includes('traslado') || lower.includes('transfer') ||
-        (lower.includes('apto') && (lower.includes('htl') || lower.includes('hotel')))) {
-        return 'traslado';
+    if (lower.includes('fit') || lower.includes('saludable') || lower.includes('healthy')) {
+        return 'comida-fit';
     }
 
-    // Tours y actividades
-    if (lower.includes('tour') || lower.includes('museos') || lower.includes('audiencia')) {
-        return 'tour';
-    }
-
-    // Trenes
-    if (lower.includes('tren') || lower.includes('train')) {
-        return 'tren';
+    if (lower.includes('template') || lower.includes('mundial')) {
+        return 'general';
     }
 
     return 'otros';
@@ -118,7 +107,7 @@ async function indexDocuments() {
         console.log("Cargando documentos...");
 
         // Cargar PDFs desde el directorio del itinerario
-        const pdfDocs = await loadPDFsFromDirectory('./fwdviajemiguelyvero');
+        const pdfDocs = await loadPDFsFromDirectory('./mundial-20260123T012440Z-3-001/mundial');
         console.log(`Total de documentos PDF cargados: ${pdfDocs.length}`);
 
         console.log("Procesando y dividiendo documentos...");
@@ -163,11 +152,11 @@ async function indexDocuments() {
 
         // Guardar metadata de los PDFs en la tabla pdf_files
         console.log("\nGuardando metadata de PDFs...");
-        const files = await fs.readdir('./fwdviajemiguelyvero');
+        const files = await fs.readdir('./mundial-20260123T012440Z-3-001/mundial');
         const pdfFiles = files.filter(file => file.toLowerCase().endsWith('.pdf'));
 
         for (const pdfFile of pdfFiles) {
-            const fullPath = path.join('./fwdviajemiguelyvero', pdfFile);
+            const fullPath = path.join('./mundial-20260123T012440Z-3-001/mundial', pdfFile);
             const category = categorizeDocument(pdfFile);
 
             try {

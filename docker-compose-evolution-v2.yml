@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: evolution-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: evolution_password
+      POSTGRES_DB: evolution
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - evolution-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: evolution-redis
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - evolution-network
+
+  evolution-api:
+    image: evoapicloud/evolution-api:v2.3.7
+    container_name: evolution-api
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      # Server
+      SERVER_URL: http://185.164.110.130:8080
+      SERVER_PORT: 8080
+
+      # API Key
+      AUTHENTICATION_API_KEY: wedding-bot-2024
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: true
+
+      # Database
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:evolution_password@postgres:5432/evolution?schema=public
+      DATABASE_SAVE_DATA_INSTANCE: true
+      DATABASE_SAVE_DATA_NEW_MESSAGE: true
+      DATABASE_SAVE_MESSAGE_UPDATE: true
+      DATABASE_SAVE_DATA_CONTACTS: true
+      DATABASE_SAVE_DATA_CHATS: true
+
+      # Redis Cache
+      CACHE_REDIS_ENABLED: true
+      CACHE_REDIS_URI: redis://redis:6379
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_REDIS_SAVE_INSTANCES: true
+
+      # Webhook Global
+      WEBHOOK_GLOBAL_URL: http://host.docker.internal:5000/webhook
+      WEBHOOK_GLOBAL_ENABLED: false
+
+      # QR Code
+      QRCODE_LIMIT: 30
+      QRCODE_COLOR: '#198754'
+
+      # Logs
+      LOG_LEVEL: ERROR
+      LOG_COLOR: true
+
+      # Instance
+      DEL_INSTANCE: false
+
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - evolution_instances:/evolution/instances
+    networks:
+      - evolution-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  evolution-manager:
+    image: evoapicloud/evolution-manager:v1
+    container_name: evolution-manager
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_API_URL: http://76.13.98.211:8080
+    depends_on:
+      - evolution-api
+    networks:
+      - evolution-network
+
+networks:
+  evolution-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  evolution_instances:

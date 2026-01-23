@@ -11,11 +11,14 @@
       "WebSearch",
       "WebFetch(domain:developers.facebook.com)",
       "WebFetch(domain:support.bolddesk.com)",
-      "WebFetch(domain:bun.sh)"
+      "WebFetch(domain:bun.sh)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   },
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
-    "context7"
+    "context7",
+    "supabase"
   ]
 }
